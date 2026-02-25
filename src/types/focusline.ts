@@ -3,8 +3,15 @@
 // Mirror of the Supabase schema for use throughout the application.
 // =============================================================================
 
-export type ObjectiveStatus = 'On-Track' | 'At-Risk' | 'Critical';
-export type TaskStatus = 'pending' | 'in_progress' | 'complete' | 'incomplete';
+export type ObjectiveStatus   = 'On-Track' | 'At-Risk' | 'Critical';
+export type TaskStatus        = 'pending' | 'in_progress' | 'complete' | 'incomplete';
+export type UserRole          = 'admin' | 'member';
+export type ObjectivePeriod   = 'monthly' | 'annual' | 'custom';
+export type ReminderFrequency = 'daily' | 'twice_weekly' | 'weekly' | 'biweekly';
+
+// =============================================================================
+// Profiles
+// =============================================================================
 
 export interface Profile {
   id: string;
@@ -13,36 +20,91 @@ export interface Profile {
   department: string;
   slack_user_id: string | null;
   timezone: string;
+  // New in migration 002
+  role: UserRole;
+  title: string | null;
+  job_description: string | null;
+  invited_by: string | null;
   created_at: string;
   updated_at: string;
 }
+
+// =============================================================================
+// Objectives
+// =============================================================================
 
 export interface Objective {
   id: string;
   title: string;
   description: string | null;
   department: string;
-  weight: number;          // 1–10
+  weight: number;            // 1–10
   target_value: number;
   current_value: number;
   status: ObjectiveStatus;
-  start_date: string;      // ISO date 'YYYY-MM-DD'
-  end_date: string;        // ISO date 'YYYY-MM-DD'
+  // Dates are auto-derived for monthly/annual; set directly for custom.
+  start_date: string;        // ISO date 'YYYY-MM-DD'
+  end_date: string;          // ISO date 'YYYY-MM-DD'
+  // Period metadata (new in migration 002)
+  period_type: ObjectivePeriod;
+  period_year: number | null;    // required for monthly + annual
+  period_month: number | null;   // 1–12; required for monthly only
   owner_id: string | null;
   created_at: string;
   updated_at: string;
 }
 
+/** Shorthand to create the right period fields for each objective type. */
+export type MonthlyObjectiveInput = Omit<
+  Objective,
+  'id' | 'status' | 'start_date' | 'end_date' | 'period_type' | 'created_at' | 'updated_at'
+> & {
+  period_type: 'monthly';
+  period_year: number;
+  period_month: number;  // 1–12
+};
+
+export type AnnualObjectiveInput = Omit<
+  Objective,
+  'id' | 'status' | 'start_date' | 'end_date' | 'period_type' | 'period_month' | 'created_at' | 'updated_at'
+> & {
+  period_type: 'annual';
+  period_year: number;
+  period_month: null;
+};
+
+export type CustomObjectiveInput = Omit<
+  Objective,
+  'id' | 'status' | 'period_type' | 'period_year' | 'period_month' | 'created_at' | 'updated_at'
+> & {
+  period_type: 'custom';
+  period_year: null;
+  period_month: null;
+};
+
+export type ObjectiveInput =
+  | MonthlyObjectiveInput
+  | AnnualObjectiveInput
+  | CustomObjectiveInput;
+
+// =============================================================================
+// Daily Logs
+// =============================================================================
+
 export interface DailyLog {
   id: string;
   user_id: string;
-  date: string;            // ISO date 'YYYY-MM-DD'
+  date: string;              // ISO date 'YYYY-MM-DD'
   f3_completed_at: string | null;
   l3_completed_at: string | null;
   rollover_count: number;
   created_at: string;
   updated_at: string;
 }
+
+// =============================================================================
+// Tasks
+// =============================================================================
 
 export interface Task {
   id: string;
@@ -52,10 +114,14 @@ export interface Task {
   status: TaskStatus;
   artifact_url: string | null;
   is_suggested: boolean;
-  position: number;        // 0–2 = F3, 3–5 = L3
+  position: number;          // 0–2 = F3, 3–5 = L3
   created_at: string;
   updated_at: string;
 }
+
+// =============================================================================
+// Blockers
+// =============================================================================
 
 export interface Blocker {
   id: string;
@@ -67,6 +133,92 @@ export interface Blocker {
   created_at: string;
   updated_at: string;
 }
+
+// =============================================================================
+// Invitations
+// =============================================================================
+
+export interface Invitation {
+  id: string;
+  email: string;
+  invited_by: string;        // Profile.id of the admin sender
+  title: string | null;
+  job_description: string | null;
+  department: string;
+  role: UserRole;
+  token: string;             // 64-char hex; used in the signup link
+  expires_at: string;
+  accepted_at: string | null;
+  created_at: string;
+}
+
+/** Shape used by the admin UI to create an invitation. */
+export interface InvitationInput {
+  email: string;
+  title: string;
+  job_description: string;
+  department: string;
+  role: UserRole;
+}
+
+/** Status the UI can display for a given invitation. */
+export type InvitationStatus = 'pending' | 'accepted' | 'expired';
+
+export function invitationStatus(inv: Invitation): InvitationStatus {
+  if (inv.accepted_at) return 'accepted';
+  if (new Date(inv.expires_at) < new Date()) return 'expired';
+  return 'pending';
+}
+
+// =============================================================================
+// Pacing Reminders
+// =============================================================================
+
+export interface PacingReminder {
+  id: string;
+  objective_id: string | null;  // NULL = catch-all reminder for any critical obj
+  recipient_id: string;
+  frequency: ReminderFrequency;
+  channel_override: string | null;
+  last_sent_at: string | null;
+  next_due_at: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Row returned by the pacing_reminder_queue view (includes joined data). */
+export interface PacingReminderQueueEntry {
+  reminder_id: string;
+  recipient_id: string;
+  recipient_name: string | null;
+  slack_user_id: string | null;
+  channel_override: string | null;
+  frequency: ReminderFrequency;
+  last_sent_at: string | null;
+  next_due_at: string;
+  // Objective (nullable for catch-all reminders)
+  objective_id: string | null;
+  objective_title: string | null;
+  objective_status: ObjectiveStatus | null;
+  current_value: number | null;
+  target_value: number | null;
+  start_date: string | null;
+  end_date: string | null;
+  period_type: ObjectivePeriod | null;
+  period_year: number | null;
+  period_month: number | null;
+  weight: number | null;
+  pacing_score: number | null;
+}
+
+/** Human-readable labels for frequency options used in the admin UI. */
+export const REMINDER_FREQUENCY_LABELS: Record<ReminderFrequency, string> = {
+  daily:        'Daily',
+  twice_weekly: 'Twice a week (Mon / Thu)',
+  weekly:       'Once a week',
+  biweekly:     'Every two weeks',
+};
 
 // =============================================================================
 // Pacing Types
@@ -109,7 +261,7 @@ export interface ObjectiveWithPacing extends Objective {
   pacing: PacingResult;
 }
 
-// Returned by recomputeObjectiveStatuses when statuses change
+/** Returned by recomputeObjectiveStatuses when a status changes. */
 export interface StatusChange {
   objectiveId: string;
   previousStatus: ObjectiveStatus;

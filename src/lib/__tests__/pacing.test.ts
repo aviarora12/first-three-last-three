@@ -30,6 +30,10 @@ const BASE_OBJECTIVE: Objective = {
   status: 'On-Track',
   start_date: '2026-01-01',
   end_date: '2026-12-31',
+  // Period fields added in migration 002
+  period_type: 'annual',
+  period_year: 2026,
+  period_month: null,
   owner_id: null,
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
